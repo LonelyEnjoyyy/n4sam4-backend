@@ -1,8 +1,7 @@
 import os
-import tempfile
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 import yt_dlp
 
 app = FastAPI()
@@ -15,59 +14,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-TEMP_DIR = tempfile.gettempdir()
-
 @app.get("/api/download")
-async def download_video(url: str = Query(...), quality: str = Query("720p")):
+async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
     if not url:
         raise HTTPException(status_code=400, detail="URL tidak boleh kosong")
 
-    format_selector = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+    height = 720
     if quality == "1080p":
-        format_selector = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+        height = 1080
     elif quality == "360p":
-        format_selector = "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-
-    out_template = os.path.join(TEMP_DIR, "%(id)s.%(ext)s")
+        height = 360
 
     ydl_opts = {
-        'format': format_selector,
-        'outtmpl': out_template,
-        'merge_output_format': 'mp4',
         'quiet': True,
         'noplaylist': True,
-        'nocheckcertificate': True,
-        'ignoreerrors': False,
-        'logtostderr': False,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web'],
-                'skip': ['dash', 'hls'],
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-            'Sec-Fetch-Mode': 'navigate',
-        }
+        'extractor_args': {'youtube': {'player_client': ['mweb', 'web']}},
     }
-    
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            base, _ = os.path.splitext(filename)
-            final_filename = base + ".mp4"
+            info = ydl.extract_info(url, download=False)
             
-            if not os.path.exists(final_filename):
-                final_filename = filename
+            title = info.get('title', 'video')
+            formats = info.get('formats', [])
+            
+            stream_url = None
+            for f in formats:
+                if f.get('height') == height and f.get('ext') == 'mp4' and f.get('url'):
+                    stream_url = f['url']
+                    break
+            
+            if not stream_url:
+                for f in formats:
+                    if f.get('ext') == 'mp4' and f.get('url') and f.get('vcodec') != 'none':
+                        stream_url = f['url']
+                        break
 
-        return FileResponse(
-            path=final_filename,
-            media_type="video/mp4",
-            filename=os.path.basename(final_filename)
-        )
+            if not stream_url:
+                raise HTTPException(status_code=500, detail="Gagal menemukan link stream video yang cocok.")
+
+        return JSONResponse({
+            "title": title,
+            "download_url": stream_url,
+            "quality": quality
+        })
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gagal memproses video: {str(e)}")
 
