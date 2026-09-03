@@ -36,7 +36,11 @@ async def download_video(url: str = Query(...), quality: str = Query("720p")):
         'merge_output_format': 'mp4',
         'quiet': True,
         'noplaylist': True,
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['ios', 'tv_embedded'],
+            }
+        },
     }
     
     try:
