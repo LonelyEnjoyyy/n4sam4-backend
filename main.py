@@ -36,8 +36,9 @@ async def download_video(url: str = Query(...), quality: str = Query("720p")):
         'merge_output_format': 'mp4',
         'quiet': True,
         'noplaylist': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
-
+    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
