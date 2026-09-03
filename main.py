@@ -1,10 +1,15 @@
 import os
 import base64
+import glob
 import tempfile
-from fastapi import FastAPI, HTTPException, Query
+import uuid
+import shutil
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse
 import yt_dlp
+
+FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 
 app = FastAPI()
 
@@ -15,6 +20,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 COOKIES_PATH = None
 _cookies_b64 = os.environ.get("YT_COOKIES_B64")
 if _cookies_b64:
@@ -30,6 +36,7 @@ if _cookies_b64:
 else:
     print("[startup] WARNING: YT_COOKIES_B64 tidak diset. Kemungkinan besar akan kena 'Sign in to confirm you're not a bot'.")
 
+
 CLIENT_STRATEGIES = [
     {"player_client": ["ios"]},
     {"player_client": ["android"]},
@@ -44,7 +51,7 @@ USER_AGENTS = {
 }
 
 
-def _build_ydl_opts(strategy: dict) -> dict:
+def _build_ydl_opts(strategy: dict, out_template: str, height: int) -> dict:
     opts = {
         "quiet": True,
         "noplaylist": True,
@@ -57,16 +64,37 @@ def _build_ydl_opts(strategy: dict) -> dict:
             )
         },
         "source_address": "0.0.0.0",
+        "format": f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={height}]/best",
+        "merge_output_format": "mp4",
+        "outtmpl": out_template,
     }
     if COOKIES_PATH:
         opts["cookiefile"] = COOKIES_PATH
     return opts
 
 
+def _cleanup_file(path: str):
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
 @app.get("/api/download")
-async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
+async def get_video_stream(
+    background_tasks: BackgroundTasks,
+    url: str = Query(...),
+    quality: str = Query("720p"),
+):
     if not url:
         raise HTTPException(status_code=400, detail="URL tidak boleh kosong")
+
+    if not FFMPEG_AVAILABLE:
+        raise HTTPException(
+            status_code=500,
+            detail="ffmpeg tidak ditemukan di server. Set env var NIXPACKS_APT_PKGS=ffmpeg di Railway lalu redeploy.",
+        )
 
     height = 720
     if quality == "1080p":
@@ -74,45 +102,53 @@ async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
     elif quality == "360p":
         height = 360
 
+    job_id = uuid.uuid4().hex
+    tmp_dir = tempfile.gettempdir()
+    out_template = os.path.join(tmp_dir, f"{job_id}.%(ext)s")
+
     last_error = None
 
     for strategy in CLIENT_STRATEGIES:
-        ydl_opts = _build_ydl_opts(strategy)
+        ydl_opts = _build_ydl_opts(strategy, out_template, height)
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+                info = ydl.extract_info(url, download=True)
 
+            candidates = glob.glob(os.path.join(tmp_dir, f"{job_id}.*"))
+            final_path = next((p for p in candidates if p.endswith(".mp4")), None)
+            if not final_path and candidates:
+                final_path = candidates[0]
+
+            if final_path and os.path.exists(final_path):
                 title = info.get("title", "video")
-                formats = info.get("formats", [])
+                safe_title = "".join(
+                    c for c in title if c.isalnum() or c in (" ", "-", "_")
+                ).strip()[:100] or "video"
 
-                stream_url = None
-                for f in formats:
-                    if f.get("height") == height and f.get("ext") == "mp4" and f.get("url"):
-                        stream_url = f["url"]
-                        break
-                if not stream_url:
-                    for f in formats:
-                        if f.get("ext") == "mp4" and f.get("url") and f.get("vcodec") != "none":
-                            stream_url = f["url"]
-                            break
+                for p in candidates:
+                    if p != final_path:
+                        _cleanup_file(p)
+                background_tasks.add_task(_cleanup_file, final_path)
 
-                if stream_url:
-                    return JSONResponse({
-                        "title": title,
-                        "download_url": stream_url,
-                        "quality": quality,
-                        "client_used": strategy["player_client"][0],
-                    })
-                last_error = "Format video tidak ditemukan pada strategi ini."
+                return FileResponse(
+                    path=final_path,
+                    filename=f"{safe_title}.mp4",
+                    media_type="video/mp4",
+                )
+
+            last_error = "File hasil download tidak ditemukan setelah proses."
 
         except yt_dlp.utils.DownloadError as e:
             last_error = str(e)
-            continue
+            for p in glob.glob(os.path.join(tmp_dir, f"{job_id}.*")):
+                _cleanup_file(p)
+            continue  # coba strategi client berikutnya
         except Exception as e:
             last_error = str(e)
+            for p in glob.glob(os.path.join(tmp_dir, f"{job_id}.*")):
+                _cleanup_file(p)
             continue
 
-    # semua strategi gagal
     if last_error and ("Sign in to confirm" in last_error or "not a bot" in last_error):
         raise HTTPException(
             status_code=503,
