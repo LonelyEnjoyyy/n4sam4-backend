@@ -28,7 +28,15 @@ async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
     ydl_opts = {
         'quiet': True,
         'noplaylist': True,
-        'extractor_args': {'youtube': {'player_client': ['mweb', 'web']}},
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['tvhtml5', 'android_creator', 'mweb'],
+                'skip': ['webpage', 'configs']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (SmartHub; SMART-TV; U; Linux/SmartTV) AppleWebKit/538.1+ (KHTML, like Gecko) TV Safari/538.1+'
+        }
     }
 
     try:
@@ -51,7 +59,7 @@ async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
                         break
 
             if not stream_url:
-                raise HTTPException(status_code=500, detail="Gagal menemukan link stream video yang cocok.")
+                raise HTTPException(status_code=500, detail="Gagal menemukan link stream video.")
 
         return JSONResponse({
             "title": title,
