@@ -13,47 +13,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-COBALT_API_URL = "https://api.cobalt.tools/"
-
 @app.get("/api/download")
 async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
     if not url:
         raise HTTPException(status_code=400, detail="URL tidak boleh kosong")
 
-    video_quality = "720"
-    if quality == "1080p":
-        video_quality = "1080"
-    elif quality == "360p":
-        video_quality = "360"
-
-    payload = {
-        "url": url,
-        "videoQuality": video_quality,
-        "downloadMode": "auto"
-    }
-
+    api_url = f"https://api.y2mate.guru/api/convert"
+    
     headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Content-Type": "application/x-www-form-urlencoded"
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(COBALT_API_URL, json=payload, headers=headers)
-            data = response.json()
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            res = await client.get(f"https://co.wuk.sh/api/json", params={"url": url}, headers={"Accept": "application/json"})
+            
+            if res.status_code != 200:
+                res = await client.post("https://cobalt.stream/api/json", json={"url": url}, headers={"Accept": "application/json"})
 
-            if response.status_code == 200 and data.get("url"):
+            data = res.json()
+            stream_url = data.get("url")
+
+            if stream_url:
                 return JSONResponse({
                     "title": "YouTube Video",
-                    "download_url": data["url"],
+                    "download_url": stream_url,
                     "quality": quality
                 })
-            
-            error_msg = data.get("text") or "Gagal memproses video via Cobalt API."
-            raise HTTPException(status_code=500, detail=error_msg)
+
+            raise HTTPException(status_code=500, detail="Gagal mendapatkan link download dari server extractor.")
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal terhubung ke API extractor: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal memproses video: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
