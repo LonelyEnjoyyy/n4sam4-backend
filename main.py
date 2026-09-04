@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 import yt_dlp
 
 FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
+print(f"[startup] ffmpeg tersedia: {FFMPEG_AVAILABLE} (path: {shutil.which('ffmpeg')})")
 
 app = FastAPI()
 
@@ -142,7 +143,7 @@ async def get_video_stream(
             last_error = str(e)
             for p in glob.glob(os.path.join(tmp_dir, f"{job_id}.*")):
                 _cleanup_file(p)
-            continue  # coba strategi client berikutnya
+            continue
         except Exception as e:
             last_error = str(e)
             for p in glob.glob(os.path.join(tmp_dir, f"{job_id}.*")):
