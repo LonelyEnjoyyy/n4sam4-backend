@@ -13,39 +13,71 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def extract_video_id(url: str) -> str:
+    if "v=" in url:
+        return url.split("v=")[1].split("&")[0]
+    elif "youtu.be/" in url:
+        return url.split("youtu.be/")[1].split("?")[0]
+    elif "shorts/" in url:
+        return url.split("shorts/")[1].split("?")[0]
+    return url
+
 @app.get("/api/download")
 async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
     if not url:
         raise HTTPException(status_code=400, detail="URL tidak boleh kosong")
 
-    api_url = f"https://api.y2mate.guru/api/convert"
+    video_id = extract_video_id(url)
     
+    piped_instances = [
+        f"https://pipedapi.kavin.rocks/streams/{video_id}",
+        f"https://api.piped.privacydev.net/streams/{video_id}",
+    ]
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Content-Type": "application/x-www-form-urlencoded"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            res = await client.get(f"https://co.wuk.sh/api/json", params={"url": url}, headers={"Accept": "application/json"})
-            
-            if res.status_code != 200:
-                res = await client.post("https://cobalt.stream/api/json", json={"url": url}, headers={"Accept": "application/json"})
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        for api_endpoint in piped_instances:
+            try:
+                res = await client.get(api_endpoint, headers=headers)
+                if res.status_code == 200:
+                    data = res.json()
+                    audio_streams = data.get("audioStreams", [])
+                    video_streams = data.get("videoStreams", [])
+                    
+                    combined_streams = [s for s in video_streams if not s.get("videoOnly")]
+                    
+                    stream_url = None
+                    if combined_streams:
+                        target_height = 720
+                        if quality == "1080p":
+                            target_height = 1080
+                        elif quality == "360p":
+                            target_height = 360
 
-            data = res.json()
-            stream_url = data.get("url")
+                        for stream in combined_streams:
+                            if stream.get("quality") == f"{target_height}p" or stream.get("height") == target_height:
+                                stream_url = stream.get("url")
+                                break
+                        
+                        if not stream_url:
+                            stream_url = combined_streams[0].get("url")
 
-            if stream_url:
-                return JSONResponse({
-                    "title": "YouTube Video",
-                    "download_url": stream_url,
-                    "quality": quality
-                })
+                    if stream_url:
+                        return JSONResponse({
+                            "title": data.get("title", "YouTube Video"),
+                            "download_url": stream_url,
+                            "quality": quality
+                        })
+            except Exception:
+                continue
 
-            raise HTTPException(status_code=500, detail="Gagal mendapatkan link download dari server extractor.")
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal memproses video: {str(e)}")
+    raise HTTPException(
+        status_code=500, 
+        detail="Gagal mengekstraksi link video dari server eksternal."
+    )
 
 if __name__ == "__main__":
     import uvicorn
