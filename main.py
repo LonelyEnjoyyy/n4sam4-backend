@@ -28,9 +28,10 @@ async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
     ydl_opts = {
         'quiet': True,
         'noplaylist': True,
+        'format': f'best[height<={height}]/best',
         'extractor_args': {
             'youtube': {
-                'player_client': ['tvhtml5', 'mweb'],
+                'player_client': ['android', 'web'],
             }
         },
     }
@@ -39,17 +40,12 @@ async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             title = info.get('title', 'video')
-            formats = info.get('formats', [])
             
-            stream_url = None
-            for f in formats:
-                if f.get('height') == height and f.get('ext') == 'mp4' and f.get('url'):
-                    stream_url = f['url']
-                    break
-            
-            if not stream_url:
-                for f in formats:
-                    if f.get('ext') == 'mp4' and f.get('url') and f.get('vcodec') != 'none':
+            stream_url = info.get('url')
+
+            if not stream_url and 'formats' in info:
+                for f in reversed(info['formats']):
+                    if f.get('url') and f.get('acodec') != 'none' and f.get('vcodec') != 'none':
                         stream_url = f['url']
                         break
 
