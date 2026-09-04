@@ -1,8 +1,7 @@
-import os
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import yt_dlp
 
 app = FastAPI()
 
@@ -14,52 +13,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+COBALT_API_URL = "https://api.cobalt.tools/"
+
 @app.get("/api/download")
 async def get_video_stream(url: str = Query(...), quality: str = Query("720p")):
     if not url:
         raise HTTPException(status_code=400, detail="URL tidak boleh kosong")
 
-    height = 720
+    video_quality = "720"
     if quality == "1080p":
-        height = 1080
+        video_quality = "1080"
     elif quality == "360p":
-        height = 360
+        video_quality = "360"
 
-    ydl_opts = {
-        'quiet': True,
-        'noplaylist': True,
-        'format': f'best[height<={height}]/best',
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web'],
-            }
-        },
+    payload = {
+        "url": url,
+        "videoQuality": video_quality,
+        "downloadMode": "auto"
+    }
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
     }
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'video')
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(COBALT_API_URL, json=payload, headers=headers)
+            data = response.json()
+
+            if response.status_code == 200 and data.get("url"):
+                return JSONResponse({
+                    "title": "YouTube Video",
+                    "download_url": data["url"],
+                    "quality": quality
+                })
             
-            stream_url = info.get('url')
-
-            if not stream_url and 'formats' in info:
-                for f in reversed(info['formats']):
-                    if f.get('url') and f.get('acodec') != 'none' and f.get('vcodec') != 'none':
-                        stream_url = f['url']
-                        break
-
-            if not stream_url:
-                raise HTTPException(status_code=500, detail="Gagal menemukan link stream video.")
-
-        return JSONResponse({
-            "title": title,
-            "download_url": stream_url,
-            "quality": quality
-        })
+            error_msg = data.get("text") or "Gagal memproses video via Cobalt API."
+            raise HTTPException(status_code=500, detail=error_msg)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gagal memproses video: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal terhubung ke API extractor: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
