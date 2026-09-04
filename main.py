@@ -23,19 +23,30 @@ app.add_middleware(
 )
 
 COOKIES_PATH = None
+_cookies_raw = os.environ.get("YT_COOKIES_RAW")
 _cookies_b64 = os.environ.get("YT_COOKIES_B64")
-if _cookies_b64:
+
+if _cookies_raw:
+    try:
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
+        tmp.write(_cookies_raw)
+        tmp.close()
+        COOKIES_PATH = tmp.name
+        print(f"[startup] Cookies (raw) loaded to {COOKIES_PATH}")
+    except Exception as e:
+        print(f"[startup] Gagal simpan YT_COOKIES_RAW: {e}")
+elif _cookies_b64:
     try:
         cookies_content = base64.b64decode(_cookies_b64).decode("utf-8")
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
         tmp.write(cookies_content)
         tmp.close()
         COOKIES_PATH = tmp.name
-        print(f"[startup] Cookies loaded to {COOKIES_PATH}")
+        print(f"[startup] Cookies (base64) loaded to {COOKIES_PATH}")
     except Exception as e:
         print(f"[startup] Gagal decode YT_COOKIES_B64: {e}")
 else:
-    print("[startup] WARNING: YT_COOKIES_B64 tidak diset. Kemungkinan besar akan kena 'Sign in to confirm you're not a bot'.")
+    print("[startup] WARNING: Cookies tidak diset (YT_COOKIES_RAW/YT_COOKIES_B64). Kemungkinan besar akan kena 'Sign in to confirm you're not a bot'.")
 
 
 CLIENT_STRATEGIES = [
@@ -150,6 +161,7 @@ async def get_video_stream(
                 _cleanup_file(p)
             continue
 
+    # semua strategi gagal
     if last_error and ("Sign in to confirm" in last_error or "not a bot" in last_error):
         raise HTTPException(
             status_code=503,
